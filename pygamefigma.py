@@ -45,13 +45,22 @@ TIMER_RECT.center = (W // 2, 54)
 
 # One entry per level, in unlock order. "file" is the prefix of assets/<file>_1.png, _2, _3...
 # unlock_h = total hours studied needed to unlock that fish.
+# song = the file name inside the music/ folder that plays while this fish is on the home screen,
+#        e.g. song="bass theme.mp3". Leave it as None to use the Nth file in music/ (alphabetical).
 FISH = [
-    dict(name="Largemouth Bass", file="bass", unlock_h=0.0,
+    dict(name="Largemouth Bass", file="bass", unlock_h=0.0, song="bassTheme.mp3",
          fact="Largemouth bass feel vibrations in the water to find prey."),
-    dict(name="Goldfish", file="goldfish", unlock_h=1.0,
+    dict(name="Goldfish", file="goldfish", unlock_h=1.0, song="goldfishTheme.mp3",
          fact="Goldfish can remember things for months, not 3 seconds!"),
-    dict(name="Salmon", file="salmon", unlock_h=3.0,
+    dict(name="Salmon", file="salmon", unlock_h=3.0, song="salmonTheme.mp3",
          fact="Salmon swim back to the stream where they were born."),
+    dict(name="Blue Tang", file = "bluetang", unlock_h = 5.0, song = "doryTheme.mp3",
+         fact = "Dory in Finding Nemo is a blue tang."),
+    dict(name = "Catfish", file="catfish", unlock_h = 8.0, song = "catfishTheme.mp3",
+         fact = "Catfish have fullbody taste buds including on their whiskered barbels."),
+    dict(name = "Clownfish", file = "clownfish", unlock_h = 10.0, song = "nemoTheme.mp3",
+        fact = "Every clownfish starts as a male, and can undergo sex change based on social dynamics")
+
 ]
 
 # Honors, shown on the books page. Order = display order of the "latest honor".
@@ -339,15 +348,41 @@ class Progress:
 # --------------------------------------------------------------------------
 # Music
 # --------------------------------------------------------------------------
-def load_music():
-    """Loads the first song in music/ with MusicReader (loops, tracks beats). None if no music."""
-    if MusicReader is None or not os.path.isdir(MUSIC_DIR):
-        return None
-    tracks = sorted(f for f in os.listdir(MUSIC_DIR) if f.lower().endswith((".mp3", ".ogg", ".wav")))
+def music_tracks():
+    """Every song file in the music/ folder, alphabetical."""
+    if not os.path.isdir(MUSIC_DIR):
+        return []
+    return sorted(f for f in os.listdir(MUSIC_DIR) if f.lower().endswith((".mp3", ".ogg", ".wav")))
+
+
+def song_for_fish(idx):
+    """The music file that belongs to fish number idx (or None if music/ is empty).
+
+    Uses the fish's own "song" from the FISH list. If that's None (or the file is missing),
+    falls back to the Nth file in music/, wrapping around if there are more fish than songs.
+    """
+    tracks = music_tracks()
     if not tracks:
         return None
+    wanted = FISH[idx].get("song")
+    if wanted:
+        by_lower = {t.lower(): t for t in tracks}  # ignore capital letters when matching
+        if wanted.lower() in by_lower:
+            return by_lower[wanted.lower()]
+        print(f"{FISH[idx]['name']}: song '{wanted}' not found in {MUSIC_DIR}. Using a default song instead.")
+    return tracks[idx % len(tracks)]
+
+
+def load_music(fish_idx=0):
+    """Starts the song that belongs to fish number fish_idx with MusicReader (loops, tracks beats).
+    Returns None if there is no music."""
+    if MusicReader is None:
+        return None
+    song = song_for_fish(fish_idx)
+    if song is None:
+        return None
     try:
-        reader = MusicReader(os.path.join(MUSIC_DIR, tracks[0]))
+        reader = MusicReader(os.path.join(MUSIC_DIR, song))
         reader.unpause()  # starts playing
         return reader
     except Exception as err:  # bad file, no audio device, ...
@@ -936,7 +971,8 @@ def main():
 
     a = load_assets()
     prog = Progress()
-    music = load_music()
+    music = None        # the MusicReader that's playing (None = no music)
+    music_song = None   # file name of the song that's loaded right now
 
     btn_info = Button(a.info, (70, H - 52))
     btn_pause = Button(a.pause, (W // 2, H - 50))
@@ -958,6 +994,16 @@ def main():
     toast = {"queue": [], "text": "", "ttl": 0.0}
     t = mouth_t = save_timer = 0.0
     just_reset = False  # True for one frame after pressing R
+
+    def start_music(fish_idx):
+        """Stop whatever is playing and start the song that belongs to this fish."""
+        nonlocal music, music_song
+        if music:
+            music.stop()
+        music = load_music(fish_idx)
+        music_song = song_for_fish(fish_idx) if music else None
+        if music and state["paused"]:
+            music.pause()
 
     def notify(msg):
         """Show a short message right away (replaces whatever toast is showing)."""
@@ -986,6 +1032,8 @@ def main():
             for new_i in range(lvl_before + 1, prog.level + 1):
                 prog.auto_pin(new_i)  # a new fish takes a free living-room slot automatically
             toast["queue"].append(f"New fish unlocked: {FISH[prog.level]['name']}!")
+            if song_for_fish(prog.level) != music_song:  # the new fish has its own song
+                start_music(prog.level)
         for name in prog.check_honors():
             toast["queue"].append(f"Honor unlocked: {name}")
 
@@ -1001,6 +1049,8 @@ def main():
         state["page"] = "home"
         if music:
             music.unpause()
+
+    start_music(prog.level)  # play the song of the fish on the home screen
 
     while True:
         dt = min(clock.tick(FPS) / 1000, 0.1)
@@ -1053,9 +1103,7 @@ def main():
                     state["countdown"] = False         # timer back to its default: counting up
                     state["gscroll"] = 0.0             # gallery back to the top
                     state["gdrag"] = False
-                    if music:                          # restart the song from the beginning
-                        music.stop()
-                        music = load_music()
+                    start_music(prog.level)            # restart music from the beginning (starter fish's song)
                     just_reset = True                  # skip this frame's time tick so the clock reads 0
                     toast["queue"].append("Progress reset to 0")
 
