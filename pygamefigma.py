@@ -59,6 +59,7 @@ HONORS = [
 # Where each fish plaque hangs in the living room (same order as FISH).
 SLOTS = [(550, 135), (190, 150), (910, 150)]
 
+logo = pygame.image.load('Assets/appIcon.png') 
 
 # --------------------------------------------------------------------------
 # Small helpers
@@ -684,7 +685,11 @@ def main():
     except pygame.error:
         print("Audio device not available; running without sound.")
     screen = pygame.display.set_mode((W, H))
-    pygame.display.set_caption("Lofi Fish")
+
+    #logo app icon
+    pygame.display.set_icon(logo)
+    pygame.display.set_caption("School of Bass")
+    
     clock = pygame.time.Clock()
 
     a = load_assets()
