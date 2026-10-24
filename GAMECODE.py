@@ -1,4 +1,4 @@
-"""Lofi Fish: a singing-fish study timer built with pygame.
+"""School of Bass: a singing-fish study timer built with pygame.
 
 Pages: home (fish + timer), pause (books + current/next fish),
 info (About the Game), living room (your top three fish),
@@ -54,21 +54,24 @@ FISH = [
          fact="Goldfish can remember things for months, not 3 seconds!"),
     dict(name="Salmon", file="salmon", unlock_h=3.0, song="salmonTheme.mp3",
          fact="Salmon swim back to the stream where they were born."),
-    dict(name="Blue Tang", file = "bluetang", unlock_h = 5.0, song = "doryTheme.mp3",
-         fact = "Dory in Finding Nemo is a blue tang."),
-    dict(name = "Catfish", file="catfish", unlock_h = 8.0, song = "catfishTheme.mp3",
-         fact = "Catfish have fullbody taste buds including on their whiskered barbels."),
-    dict(name = "Clownfish", file = "clownfish", unlock_h = 10.0, song = "nemoTheme.mp3",
-        fact = "Every clownfish starts as a male, and can undergo sex change based on social dynamics")
-
+    dict(name="Blue Tang", file="bluetang", unlock_h=5.0, song="doryTheme.mp3",
+         fact="Dory in Finding Nemo is a blue tang."),
+    dict(name="Catfish", file="catfish", unlock_h=8.0, song="catfishTheme.mp3",
+         fact="Catfish have fullbody taste buds including on their whiskered barbels."),
+    dict(name="Clownfish", file="clownfish", unlock_h=10.0, song="nemoTheme.mp3",
+         fact="Every clownfish starts as a male, and can undergo sex change based on social dynamics."),
+    dict(name="???", file="comingSoon", unlock_h=999999, song=None,
+         fact="More fish coming soon!", coming_soon=True)
 ]
+
+REAL_FISH_COUNT = len([f for f in FISH if not f.get("coming_soon")])
 
 # Honors, shown on the books page. Order = display order of the "latest honor".
 HONORS = [
     ("Goldfish Friend", lambda p: p.level >= 1),
     ("Deep Focus", lambda p: p.max_session >= 45 * 60),
     ("Marathon Swimmer", lambda p: p.max_session >= 2 * 3600),
-    ("Super Fish", lambda p: p.level >= len(FISH) - 1),
+    ("Super Fish", lambda p: p.level >= REAL_FISH_COUNT - 1),
 ]
 
 # Where each fish plaque hangs in the living room (same order as FISH).
@@ -213,6 +216,16 @@ def gray_keep_alpha(img):
     return g
 
 
+def blackout_look(img):
+    """Pitch black silhouette keeping the original transparency."""
+    b = img.copy().convert_alpha()
+    b.fill((20, 20, 25, 255), special_flags=pygame.BLEND_RGBA_MAX)
+    mask = img.copy()
+    mask.fill((255, 255, 255, 0), special_flags=pygame.BLEND_RGBA_MAX)
+    b.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    return b
+
+
 def locked_look(img):
     """Gray and slightly darkened: how locked fish appear in the gallery."""
     g = gray_keep_alpha(img)
@@ -275,7 +288,7 @@ class Progress:
     def level(self):
         lvl = 0
         for i, f in enumerate(FISH):
-            if self.total >= f["unlock_h"] * 3600:
+            if not f.get("coming_soon") and self.total >= f["unlock_h"] * 3600:
                 lvl = i
         return lvl
 
@@ -293,7 +306,7 @@ class Progress:
 
     def hours_to_next(self):
         nxt = self.level + 1
-        if nxt >= len(FISH):
+        if nxt >= len(FISH) or FISH[nxt].get("coming_soon"):
             return None
         return max(0.0, FISH[nxt]["unlock_h"] * 3600 - self.total) / 3600
 
@@ -302,12 +315,14 @@ class Progress:
         favs = self.favorites if isinstance(self.favorites, list) else []
         clean = []
         for i in favs:
-            if isinstance(i, int) and 0 <= i < len(FISH) and i <= self.level and i not in clean:
+            if isinstance(i, int) and 0 <= i < len(FISH) and not FISH[i].get("coming_soon") and i <= self.level and i not in clean:
                 clean.append(i)
         self.favorites = clean[:MAX_FAVORITES]
 
     def toggle_favorite(self, i):
-        """Add/remove fish i from the living room. Returns "added", "removed", "full" or "locked"."""
+        """Add/remove fish i from the living room. Returns "added", "removed", "full", "locked" or "coming_soon"."""
+        if FISH[i].get("coming_soon"):
+            return "coming_soon"
         if i > self.level:
             return "locked"
         if i in self.favorites:
@@ -320,7 +335,7 @@ class Progress:
 
     def auto_pin(self, i):
         """A newly unlocked fish takes a free living-room slot, if there is one."""
-        if i not in self.favorites and len(self.favorites) < MAX_FAVORITES:
+        if not FISH[i].get("coming_soon") and i not in self.favorites and len(self.favorites) < MAX_FAVORITES:
             self.favorites.append(i)
 
     def check_honors(self):
@@ -363,11 +378,7 @@ def music_tracks():
 
 
 def song_for_fish(idx):
-    """The music file that belongs to fish number idx (or None if music/ is empty).
-
-    Uses the fish's own "song" from the FISH list. If that's None (or the file is missing),
-    falls back to the Nth file in music/, wrapping around if there are more fish than songs.
-    """
+    """The music file that belongs to fish number idx (or None if music/ is empty)."""
     tracks = music_tracks()
     if not tracks:
         return None
@@ -609,6 +620,7 @@ def load_assets():
             big=[fit(fr, 590, 270) for fr in frames],
             plaque=plaque,
             plaque_gray=[locked_look(pl) for pl in plaque],  # grayed-out version for the gallery
+            plaque_black=[blackout_look(pl) for pl in plaque], # pitch black silhouette for coming soon
             card=[fit(fr, 250, 112) for fr in frames],
         ))
 
@@ -707,8 +719,9 @@ def draw_pause(screen, a, prog, cards, cur_rect, next_rect):
     pygame.draw.rect(screen, (255, 255, 255) if hovered else (40, 25, 15), cur_rect.inflate(8, 8), 3)
 
     draw_text(screen, "Next Fish", font(24, True), CREAM, (next_rect.centerx, next_rect.top - 22), shadow=shadow)
-    if lvl + 1 < len(FISH):
-        screen.blit(cards[(lvl + 1, True)], next_rect)
+    nxt_idx = lvl + 1
+    if nxt_idx < len(FISH) and not FISH[nxt_idx].get("coming_soon"):
+        screen.blit(cards[(nxt_idx, True)], next_rect)
     else:
         pygame.draw.rect(screen, (250, 246, 238), next_rect)
         pygame.draw.rect(screen, (40, 25, 15), next_rect, 3)
@@ -723,7 +736,7 @@ def draw_pause(screen, a, prog, cards, cur_rect, next_rect):
 
     hrs = prog.hours_to_next()
     values = {
-        "fish": ("Fish collected", f"{lvl + 1} / {len(FISH)}"),
+        "fish": ("Fish collected", f"{lvl + 1} / {REAL_FISH_COUNT}"),
         "honors": (f"Honors ({len(prog.honors)})", prog.honors[-1] if prog.honors else "None yet"),
         "max": ("Max time studied", fmt_dur(prog.max_session)),
         "time": ("Time studied", fmt_dur(prog.session)),
@@ -831,7 +844,7 @@ def draw_living_room(screen, a, prog, t, music):
         pygame.draw.circle(screen, (255, int(200 + 40 * tw), int(110 + 60 * tw)), (int(x), int(y) + 4), 4)
 
     screen.blit(a.vignette, (0, 0))
-    draw_text(screen, f"Fish collected: {prog.level + 1} / {len(FISH)}", font(20, True), CREAM,
+    draw_text(screen, f"Fish collected: {prog.level + 1} / {REAL_FISH_COUNT}", font(20, True), CREAM,
               (W - 24, 34), anchor="midright", shadow=(0, 0, 0))
 
 
@@ -899,15 +912,21 @@ def draw_gallery(screen, a, prog, t, music, scroll):
     for i, cx, cy in gallery_cells(n, scroll):
         if cy + 110 < GALLERY_VIEW.top or cy - 90 > GALLERY_VIEW.bottom:
             continue  # off screen, skip
-        unlocked = i <= prog.level
+
+        is_coming_soon = FISH[i].get("coming_soon", False)
+        unlocked = i <= prog.level and not is_coming_soon
+
         board = a.board_plaque if unlocked else a.board_gray
         rect = board.get_rect(center=(cx, cy))
         screen.blit(board, rect)
 
-        if unlocked:  # unlocked fish sing along with the music
+        if is_coming_soon:  # coming soon fish: blacked out silhouette
+            frames = a.fish[i].plaque_black
+            idx = 0
+        elif unlocked:      # unlocked fish sing along with the music
             frames = a.fish[i].plaque
             idx = mouth_index(music, len(frames), t * 4, i * 3)
-        else:         # locked fish are gray and still
+        else:               # locked fish are gray and still
             frames = a.fish[i].plaque_gray
             idx = 0
         screen.blit(frames[idx], frames[idx].get_rect(center=(cx, cy - 2)))
@@ -923,12 +942,20 @@ def draw_gallery(screen, a, prog, t, music, scroll):
 
         plate = pygame.Rect(0, 0, 148, 20)
         plate.midtop = (cx, rect.bottom + 4)
-        pygame.draw.rect(screen, (196, 160, 70) if unlocked else (128, 120, 104), plate, border_radius=3)
-        pygame.draw.rect(screen, (120, 90, 30) if unlocked else (84, 78, 66), plate, 1, border_radius=3)
-        name = FISH[i]["name"]
-        draw_text(screen, name, fit_font(name, 13, 140, True),
-                  (50, 34, 10) if unlocked else (60, 56, 48), plate.center)
-        if not unlocked:
+
+        plate_bg = (196, 160, 70) if unlocked else (60, 60, 65) if is_coming_soon else (128, 120, 104)
+        plate_border = (120, 90, 30) if unlocked else (40, 40, 45) if is_coming_soon else (84, 78, 66)
+        pygame.draw.rect(screen, plate_bg, plate, border_radius=3)
+        pygame.draw.rect(screen, plate_border, plate, 1, border_radius=3)
+
+        name = "Coming Soon..." if is_coming_soon else FISH[i]["name"]
+        text_col = (50, 34, 10) if unlocked else (210, 210, 215) if is_coming_soon else (60, 56, 48)
+        draw_text(screen, name, fit_font(name, 13, 140, True), text_col, plate.center)
+
+        if is_coming_soon:
+            draw_text(screen, "More fish coming soon!", font(13, True), CREAM,
+                      (cx, plate.bottom + 10), shadow=(0, 0, 0))
+        elif not unlocked:
             draw_text(screen, f"Unlocks at {FISH[i]['unlock_h']:g} hrs", font(13), CREAM,
                       (cx, plate.bottom + 10), shadow=(0, 0, 0))
     screen.set_clip(None)
@@ -948,7 +975,7 @@ def draw_gallery(screen, a, prog, t, music, scroll):
               f"Click an unlocked fish to save it to your living room ({len(prog.favorites)}/{MAX_FAVORITES}). "
               "Gold badge = on display.",
               font(16), CREAM, (W // 2, 65))
-    draw_text(screen, f"Collected {prog.level + 1} / {n}", font(18, True), CREAM, (W - 30, 31), anchor="midright")
+    draw_text(screen, f"Collected {prog.level + 1} / {REAL_FISH_COUNT}", font(18, True), CREAM, (W - 30, 31), anchor="midright")
 
 
 def draw_toast(screen, text):
@@ -1030,6 +1057,8 @@ def main():
             prog.save()
         elif result == "full":
             notify("Living room is full: click a fish with a gold badge to swap it out")
+        elif result == "coming_soon":
+            notify("Stay tuned! More fish coming soon.")
         else:
             notify(f"{name} unlocks at {FISH[i]['unlock_h']:g} hrs studied")
 
