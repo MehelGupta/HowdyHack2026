@@ -279,6 +279,13 @@ class Progress:
                 lvl = i
         return lvl
 
+    @property
+    def active_fish(self):
+        """Returns the first fish selected in the gallery/living room, or highest unlocked level."""
+        if self.favorites:
+            return self.favorites[0]
+        return self.level
+
     def add(self, sec):
         self.total += sec
         self.session += sec
@@ -651,8 +658,8 @@ def draw_home(screen, a, prog, t, mouth_t, music, countdown=False):
     board_rect = a.board_home.get_rect(center=(W // 2, 268))
     screen.blit(a.board_home, board_rect)
 
-    lvl = prog.level
-    frames = a.fish[lvl].big
+    active_idx = prog.active_fish
+    frames = a.fish[active_idx].big
     idx = mouth_index(music, len(frames), mouth_t / 0.18)
     if music is not None and music.is_playing and music.base_bpm > 0:
         bob = -math.sin(music.beat_phase() * math.pi) * 8  # hops up on each beat
@@ -663,7 +670,7 @@ def draw_home(screen, a, prog, t, mouth_t, music, countdown=False):
     screen.blit(img, img.get_rect(center=(W // 2, 240 + bob)))
 
     # One-line fun fact on the lower edge of the board
-    fact = FISH[lvl]["fact"]
+    fact = FISH[active_idx]["fact"]
     fnt = fit_font(fact, 17, board_rect.width - 90)
     tw, th = fnt.size(fact)
     strip = pygame.Surface((tw + 30, th + 10), pygame.SRCALPHA)
@@ -687,10 +694,11 @@ def draw_pause(screen, a, prog, cards, cur_rect, next_rect):
     screen.blit(a.bg, (0, 0))
     shadow = (40, 20, 10)
     lvl = prog.level
+    active_idx = prog.active_fish
 
     # Current / next fish cards (left)
     draw_text(screen, "Current Fish", font(24, True), CREAM, (cur_rect.centerx, cur_rect.top - 22), shadow=shadow)
-    screen.blit(cards[(lvl, False)], cur_rect)
+    screen.blit(cards[(active_idx, False)], cur_rect)
     ov = pygame.Surface((70, 70), pygame.SRCALPHA)
     pygame.draw.circle(ov, (0, 0, 0, 120), (35, 35), 35)
     pygame.draw.polygon(ov, (255, 255, 255, 235), [(28, 20), (28, 50), (52, 35)])
@@ -1025,6 +1033,10 @@ def main():
         else:
             notify(f"{name} unlocks at {FISH[i]['unlock_h']:g} hrs studied")
 
+        # Switch song if the top favorite fish changed
+        if song_for_fish(prog.active_fish) != music_song:
+            start_music(prog.active_fish)
+
     def advance(sec):
         lvl_before = prog.level
         prog.add(sec)
@@ -1032,8 +1044,8 @@ def main():
             for new_i in range(lvl_before + 1, prog.level + 1):
                 prog.auto_pin(new_i)  # a new fish takes a free living-room slot automatically
             toast["queue"].append(f"New fish unlocked: {FISH[prog.level]['name']}!")
-            if song_for_fish(prog.level) != music_song:  # the new fish has its own song
-                start_music(prog.level)
+            if song_for_fish(prog.active_fish) != music_song:  # update track if active fish changed
+                start_music(prog.active_fish)
         for name in prog.check_honors():
             toast["queue"].append(f"Honor unlocked: {name}")
 
@@ -1050,7 +1062,7 @@ def main():
         if music:
             music.unpause()
 
-    start_music(prog.level)  # play the song of the fish on the home screen
+    start_music(prog.active_fish)  # play the song of the active fish on the home screen
 
     while True:
         dt = min(clock.tick(FPS) / 1000, 0.1)
@@ -1103,7 +1115,7 @@ def main():
                     state["countdown"] = False         # timer back to its default: counting up
                     state["gscroll"] = 0.0             # gallery back to the top
                     state["gdrag"] = False
-                    start_music(prog.level)            # restart music from the beginning (starter fish's song)
+                    start_music(prog.active_fish)      # restart music from the beginning (starter fish's song)
                     just_reset = True                  # skip this frame's time tick so the clock reads 0
                     toast["queue"].append("Progress reset to 0")
 
