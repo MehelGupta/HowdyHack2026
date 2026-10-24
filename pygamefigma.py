@@ -92,6 +92,19 @@ def draw_text(surf, text, fnt, color, pos, anchor="center", shadow=None):
     return rect
 
 
+def draw_text_outlined(surf, text, fnt, color, outline, pos, width=2, anchor="center"):
+    """Draw text with a solid outline around every letter (keeps it readable on busy backgrounds)."""
+    img = fnt.render(text, True, color)
+    edge = fnt.render(text, True, outline)
+    rect = img.get_rect(**{anchor: pos})
+    for dx in range(-width, width + 1):
+        for dy in range(-width, width + 1):
+            if (dx or dy) and dx * dx + dy * dy <= width * width + 1:  # roughly circular outline
+                surf.blit(edge, rect.move(dx, dy))
+    surf.blit(img, rect)
+    return rect
+
+
 def wrap(text, fnt, max_w):
     lines, line = [], ""
     for word in text.split():
@@ -119,6 +132,13 @@ def fmt_dur(sec):
     h, rem = divmod(sec, 3600)
     m, s = divmod(rem, 60)
     return f"{h}h {m:02d}m" if h else f"{m}m {s:02d}s"
+
+
+def fmt_hm(sec):
+    """Hours and minutes, e.g. "1h 05m". Minutes round UP so it never says 0h 00m before the unlock."""
+    total_min = math.ceil(sec / 60)
+    h, m = divmod(total_min, 60)
+    return f"{h}h {m:02d}m"
 
 
 def load_img(name):
@@ -573,18 +593,21 @@ def draw_pause(screen, a, prog, cards, cur_rect, next_rect):
         "honors": (f"Honors ({len(prog.honors)})", prog.honors[-1] if prog.honors else "None yet"),
         "max": ("Max time studied", fmt_dur(prog.max_session)),
         "time": ("Time studied", fmt_dur(prog.session)),
-        "next": ("Hours to next fish", "All unlocked!" if hrs is None else f"{max(hrs, 0.1):.1f} hrs"),
+        "next": ("Time to next fish", "All unlocked!" if hrs is None else fmt_hm(hrs * 3600)),
         "total": ("Total studied", fmt_dur(prog.total)),
     }
     ox, oy = a.books_origin
     s = a.books_scale
     for cx, cy, key, light in SPINES:
         label, value = values[key]
-        color = (250, 235, 190) if light else (35, 20, 8)
+        # Light cream text with a dark outline on the dark-red books,
+        # dark text with a cream outline on the gold books.
+        color = (255, 240, 200) if light else (30, 15, 5)
+        outline = (45, 18, 8) if light else (255, 244, 214)
         px = bx + (cx - ox) * s
         py = by + (cy - oy) * s
-        draw_text(screen, label, fit_font(label, 13, 220), color, (px, py - 10))
-        draw_text(screen, value, fit_font(value, 18, 220, True), color, (px, py + 9))
+        draw_text_outlined(screen, label, fit_font(label, 15, 210, True), color, outline, (px, py - 11))
+        draw_text_outlined(screen, value, fit_font(value, 20, 210, True), color, outline, (px, py + 10))
 
 
 def draw_info(screen, a):
