@@ -27,7 +27,10 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(BASE, "assets")
 MUSIC_DIR = os.path.join(BASE, "music")
 SAVE_PATH = os.path.join(BASE, "save.json")
-DEBUG_KEYS = True  # press T on any non-paused page to add 15 minutes (for testing)
+DEBUG_KEYS = True  # developer keys (testing only), work on any non-paused page:
+#   T = add 15 minutes studied
+#   L = add exactly the time left to unlock the next fish
+#   R = reset ALL progress to 0 (also overwrites save.json!)
 
 GREEN = (8, 43, 10)
 MUSTARD = (203, 191, 112)
@@ -230,6 +233,14 @@ class Progress:
                 self.honors.append(name)
                 new.append(name)
         return new
+
+    def reset(self):
+        """Wipe all progress back to a brand-new game and save it (debug use)."""
+        self.total = 0.0
+        self.max_session = 0.0
+        self.session = 0.0
+        self.honors = []
+        self.save()
 
     def save(self):
         try:
@@ -713,6 +724,7 @@ def main():
     state = {"page": "home", "paused": False}
     toast = {"queue": [], "text": "", "ttl": 0.0}
     t = mouth_t = save_timer = 0.0
+    just_reset = False  # True for one frame after pressing R
 
     def advance(sec):
         lvl_before = prog.level
@@ -737,6 +749,7 @@ def main():
 
     while True:
         dt = min(clock.tick(FPS) / 1000, 0.1)
+        just_reset = False
         t += dt
 
         for event in pygame.event.get():
@@ -761,6 +774,25 @@ def main():
                         go_resume()
                 elif DEBUG_KEYS and event.key == pygame.K_t and not state["paused"]:
                     advance(900)
+                elif DEBUG_KEYS and event.key == pygame.K_l and not state["paused"]:
+                    # Jump straight to the next fish's unlock time
+                    hrs = prog.hours_to_next()
+                    if hrs is not None:  # None means every fish is already unlocked
+                        advance(hrs * 3600 + 1)  # +1 second so rounding can't leave us just short
+                elif DEBUG_KEYS and event.key == pygame.K_r:
+                    # Put EVERYTHING back to a fresh start
+                    prog.reset()                       # total, max session, session clock, honors -> 0 (and saved)
+                    mouth_t = save_timer = 0.0         # mouth animation + autosave timers
+                    toast["queue"].clear()             # drop pending toasts...
+                    toast["ttl"] = 0.0                 # ...and hide the one on screen
+                    toast["text"] = ""
+                    state["paused"] = False            # leave the pause screen if we were on it
+                    state["page"] = "home"             # always return to the home page
+                    if music:                          # restart the song from the beginning
+                        music.stop()
+                        music = load_music()
+                    just_reset = True                  # skip this frame's time tick so the clock reads 0
+                    toast["queue"].append("Progress reset to 0")
 
             if page == "home":
                 if btn_pause.clicked(event):
@@ -780,7 +812,7 @@ def main():
             music.update()  # keeps the loop going and tracks beats
 
         # Time only counts while studying (not paused)
-        if not state["paused"]:
+        if not state["paused"] and not just_reset:
             mouth_t += dt
             advance(dt)
             save_timer += dt
