@@ -1,7 +1,8 @@
 """Lofi Fish: a singing-fish study timer built with pygame.
 
 Pages: home (fish + timer), pause (books + current/next fish),
-info (About the Game), living room (all collected fish).
+info (About the Game), living room (your top three fish),
+gallery (every fish, scrollable; click an unlocked fish to save it to the living room).
 """
 import json
 import math
@@ -63,6 +64,14 @@ HONORS = [
 
 # Where each fish plaque hangs in the living room (same order as FISH).
 SLOTS = [(550, 135), (190, 150), (910, 150)]
+MAX_FAVORITES = len(SLOTS)  # how many fish can hang in the living room (one per slot above)
+
+# Gallery layout: a scrolling grid under a 84px header
+GALLERY_VIEW = pygame.Rect(0, 84, W, H - 84)  # the scrolling area
+GALLERY_COLS = 4                              # fish per row
+GALLERY_CELL_W = 250                          # horizontal space per fish
+GALLERY_ROW_H = 200                           # vertical space per row
+GALLERY_LEFT = (W - GALLERY_COLS * GALLERY_CELL_W) // 2
 
 logo = pygame.image.load('Assets/appIcon.png') 
 
@@ -185,6 +194,23 @@ def grayscale(img):
     return g
 
 
+def gray_keep_alpha(img):
+    """Grayscale copy that keeps the original transparency exactly (for plaques and fish cut-outs)."""
+    g = grayscale(img).convert_alpha()
+    g.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGBA_MAX)       # make every pixel opaque...
+    mask = img.copy()
+    mask.fill((255, 255, 255, 0), special_flags=pygame.BLEND_RGBA_MAX)  # ...white with the original alpha
+    g.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)        # ...then restore the original alpha
+    return g
+
+
+def locked_look(img):
+    """Gray and slightly darkened: how locked fish appear in the gallery."""
+    g = gray_keep_alpha(img)
+    g.fill((150, 150, 150), special_flags=pygame.BLEND_RGB_MULT)
+    return g
+
+
 def glow_surface(radius, color, max_alpha):
     s = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
     steps = 24
@@ -219,14 +245,21 @@ class Progress:
         self.max_session = 0.0  # longest single session, seconds
         self.session = 0.0      # this run's timer
         self.honors = []
+        self.favorites = []     # fish indexes hanging in the living room (max 3), in slot order
+        saved_favs = None
         try:
             with open(SAVE_PATH) as f:
                 data = json.load(f)
             self.total = float(data.get("total", 0))
             self.max_session = float(data.get("max_session", 0))
             self.honors = list(data.get("honors", []))
+            saved_favs = data.get("favorites")
         except (OSError, ValueError):
             pass
+        if saved_favs is None:  # brand-new game or an older save: start with the first fish you own
+            saved_favs = list(range(min(MAX_FAVORITES, self.level + 1)))
+        self.favorites = saved_favs
+        self.clean_favorites()
         self.check_honors()
 
     @property
@@ -248,6 +281,32 @@ class Progress:
             return None
         return max(0.0, FISH[nxt]["unlock_h"] * 3600 - self.total) / 3600
 
+    def clean_favorites(self):
+        """Drop anything invalid: unknown or still-locked fish, duplicates, or more than 3."""
+        favs = self.favorites if isinstance(self.favorites, list) else []
+        clean = []
+        for i in favs:
+            if isinstance(i, int) and 0 <= i < len(FISH) and i <= self.level and i not in clean:
+                clean.append(i)
+        self.favorites = clean[:MAX_FAVORITES]
+
+    def toggle_favorite(self, i):
+        """Add/remove fish i from the living room. Returns "added", "removed", "full" or "locked"."""
+        if i > self.level:
+            return "locked"
+        if i in self.favorites:
+            self.favorites.remove(i)
+            return "removed"
+        if len(self.favorites) >= MAX_FAVORITES:
+            return "full"
+        self.favorites.append(i)
+        return "added"
+
+    def auto_pin(self, i):
+        """A newly unlocked fish takes a free living-room slot, if there is one."""
+        if i not in self.favorites and len(self.favorites) < MAX_FAVORITES:
+            self.favorites.append(i)
+
     def check_honors(self):
         new = []
         for name, cond in HONORS:
@@ -262,13 +321,15 @@ class Progress:
         self.max_session = 0.0
         self.session = 0.0
         self.honors = []
+        self.favorites = [0]  # the starter fish
         self.save()
 
     def save(self):
         try:
             with open(SAVE_PATH, "w") as f:
                 json.dump(
-                    {"total": self.total, "max_session": self.max_session, "honors": self.honors},
+                    {"total": self.total, "max_session": self.max_session,
+                     "honors": self.honors, "favorites": self.favorites},
                     f,
                 )
         except OSError:
@@ -364,6 +425,15 @@ def make_back_button():
     s = pygame.Surface((56, 56), pygame.SRCALPHA)
     pygame.draw.circle(s, GREEN, (28, 28), 28)
     pygame.draw.lines(s, (255, 255, 255), False, [(32, 16), (20, 28), (32, 40)], 6)
+    return s
+
+
+def make_pill(label, w=150, h=48):
+    """A rounded green text button (used for the Gallery button)."""
+    s = pygame.Surface((w, h), pygame.SRCALPHA)
+    pygame.draw.rect(s, GREEN, s.get_rect(), border_radius=h // 2)
+    pygame.draw.rect(s, CREAM, s.get_rect(), 2, border_radius=h // 2)
+    draw_text(s, label, font(22, True), CREAM, s.get_rect().center)
     return s
 
 
@@ -473,6 +543,7 @@ def load_assets():
     a.board_plaque = pygame.transform.smoothscale(board_land, (210, 150))
     a.board_locked = a.board_plaque.copy()
     a.board_locked.fill((90, 90, 90), special_flags=pygame.BLEND_RGB_MULT)
+    a.board_gray = locked_look(a.board_plaque)  # grayed-out plaque for locked fish in the gallery
 
     books, rect = crop(load_img("books.png"))
     a.books_origin = (rect.x, rect.y)
@@ -485,14 +556,17 @@ def load_assets():
     fish_icon = load_img("fishButton.png")
     a.fish_btn = scale_to(fish_icon, w=104)
     a.back = make_back_button()
+    a.gallery_btn = make_pill("Gallery")
     a.pattern = make_pattern(fish_icon)
 
     a.fish = []
     for f in FISH:
         frames = load_fish_frames(f["file"])
+        plaque = [fit(fr, 196, 96) for fr in frames]
         a.fish.append(SimpleNamespace(
             big=[fit(fr, 590, 270) for fr in frames],
-            plaque=[fit(fr, 196, 96) for fr in frames],
+            plaque=plaque,
+            plaque_gray=[locked_look(pl) for pl in plaque],  # grayed-out version for the gallery
             card=[fit(fr, 250, 112) for fr in frames],
         ))
 
@@ -523,7 +597,11 @@ def make_card(a, idx, locked):
 def draw_home(screen, a, prog, t, mouth_t, music, countdown=False):
     screen.blit(a.bg, (0, 0))
 
-    
+    # Timer: counts UP (this session) by default, or DOWN to the next fish when toggled
+    if TIMER_RECT.collidepoint(pygame.mouse.get_pos()):  # soft highlight so it feels clickable
+        hl = pygame.Surface(TIMER_RECT.size, pygame.SRCALPHA)
+        pygame.draw.rect(hl, (255, 255, 255, 60), hl.get_rect(), border_radius=18)
+        screen.blit(hl, TIMER_RECT)
     if countdown:
         hrs = prog.hours_to_next()
         secs = 0 if hrs is None else math.ceil(hrs * 3600)  # round up so 0:00 lands exactly on the unlock
@@ -677,26 +755,27 @@ def draw_living_room(screen, a, prog, t, music):
         pygame.draw.circle(screen, (255, 200, 90), (cx, 230), r)
         pygame.draw.circle(screen, (255, 245, 200), (cx, 231), max(r - 2, 1))
 
-    # Fish plaques
-    for i, f in enumerate(FISH):
-        pos = SLOTS[i]
-        unlocked = i <= prog.level
-        board = a.board_plaque if unlocked else a.board_locked
+    # Fish plaques: the fish you saved from the Gallery, in the order you saved them
+    for slot, pos in enumerate(SLOTS):
+        fish_i = prog.favorites[slot] if slot < len(prog.favorites) else None
+        board = a.board_plaque if fish_i is not None else a.board_locked
         rect = board.get_rect(center=pos)
         screen.blit(board, rect)
-        if unlocked:
-            frames = a.fish[i].plaque
-            idx = mouth_index(music, len(frames), t * 4, i * 3)
+        if fish_i is not None:
+            frames = a.fish[fish_i].plaque
+            idx = mouth_index(music, len(frames), t * 4, slot * 3)
             screen.blit(frames[idx], frames[idx].get_rect(center=(pos[0], pos[1] - 2)))
+            label = FISH[fish_i]["name"]
         else:
-            draw_text(screen, "?", font(64, True), (200, 190, 170), pos)
+            draw_text(screen, "+", font(64, True), (200, 190, 170), pos)
+            label = "Empty slot"
         plate = pygame.Rect(0, 0, 128, 20)
         plate.midtop = (pos[0], rect.bottom + 4)
         pygame.draw.rect(screen, (196, 160, 70), plate, border_radius=3)
         pygame.draw.rect(screen, (120, 90, 30), plate, 1, border_radius=3)
-        draw_text(screen, f["name"] if unlocked else "???", font(13, True), (50, 34, 10), plate.center)
-        if not unlocked:
-            draw_text(screen, f"Unlocks at {f['unlock_h']:g} hrs", font(13), CREAM,
+        draw_text(screen, label, fit_font(label, 13, 120, True), (50, 34, 10), plate.center)
+        if fish_i is None:
+            draw_text(screen, "Pick one in the Gallery", font(13), CREAM,
                       (pos[0], plate.bottom + 12), shadow=(0, 0, 0))
 
     # String lights
@@ -711,6 +790,122 @@ def draw_living_room(screen, a, prog, t, music):
     screen.blit(a.vignette, (0, 0))
     draw_text(screen, f"Fish collected: {prog.level + 1} / {len(FISH)}", font(20, True), CREAM,
               (W - 24, 34), anchor="midright", shadow=(0, 0, 0))
+
+
+# --------------------------------------------------------------------------
+# Gallery page: every fish in a scrolling grid
+# --------------------------------------------------------------------------
+def gallery_cells(n, scroll):
+    """(fish index, plaque center x, plaque center y) for every fish, shifted up by the scroll amount."""
+    cells = []
+    for i in range(n):
+        row, col = divmod(i, GALLERY_COLS)
+        cx = GALLERY_LEFT + col * GALLERY_CELL_W + GALLERY_CELL_W // 2
+        cy = GALLERY_VIEW.top + 10 + row * GALLERY_ROW_H + 75 - round(scroll)
+        cells.append((i, cx, cy))
+    return cells
+
+
+def gallery_hit(pos, n, scroll):
+    """Index of the fish under the mouse position, or None."""
+    if not GALLERY_VIEW.collidepoint(pos):
+        return None
+    for i, cx, cy in gallery_cells(n, scroll):
+        if pygame.Rect(cx - 105, cy - 75, 210, 178).collidepoint(pos):  # plaque + name plate
+            return i
+    return None
+
+
+def gallery_content_h(n):
+    rows = -(-n // GALLERY_COLS)  # ceiling division
+    return rows * GALLERY_ROW_H + 20
+
+
+def gallery_max_scroll(n):
+    return max(0, gallery_content_h(n) - GALLERY_VIEW.height)
+
+
+def gallery_scrollbar(n, scroll):
+    """(track rect, thumb rect), or None when everything already fits on screen."""
+    max_s = gallery_max_scroll(n)
+    if max_s <= 0:
+        return None
+    track = pygame.Rect(W - 16, GALLERY_VIEW.top + 8, 10, GALLERY_VIEW.height - 16)
+    thumb_h = max(40, round(track.height * GALLERY_VIEW.height / gallery_content_h(n)))
+    thumb_y = track.top + round((track.height - thumb_h) * scroll / max_s)
+    return track, pygame.Rect(track.left, thumb_y, track.width, thumb_h)
+
+
+def gallery_scroll_from_mouse(n, mouse_y):
+    """Scroll amount that puts the scrollbar thumb under the mouse (for dragging)."""
+    bar = gallery_scrollbar(n, 0)
+    if bar is None:
+        return 0.0
+    track, thumb = bar
+    span = track.height - thumb.height
+    frac = (mouse_y - track.top - thumb.height / 2) / span
+    return max(0.0, min(1.0, frac)) * gallery_max_scroll(n)
+
+
+def draw_gallery(screen, a, prog, t, music, scroll):
+    screen.blit(a.bg, (0, 0))
+    n = len(FISH)
+    hover_i = gallery_hit(pygame.mouse.get_pos(), n, scroll)
+
+    screen.set_clip(GALLERY_VIEW)  # nothing drawn below can leak over the header
+    for i, cx, cy in gallery_cells(n, scroll):
+        if cy + 110 < GALLERY_VIEW.top or cy - 90 > GALLERY_VIEW.bottom:
+            continue  # off screen, skip
+        unlocked = i <= prog.level
+        board = a.board_plaque if unlocked else a.board_gray
+        rect = board.get_rect(center=(cx, cy))
+        screen.blit(board, rect)
+
+        if unlocked:  # unlocked fish sing along with the music
+            frames = a.fish[i].plaque
+            idx = mouth_index(music, len(frames), t * 4, i * 3)
+        else:         # locked fish are gray and still
+            frames = a.fish[i].plaque_gray
+            idx = 0
+        screen.blit(frames[idx], frames[idx].get_rect(center=(cx, cy - 2)))
+
+        if unlocked and i == hover_i:  # hover outline: this one is clickable
+            pygame.draw.rect(screen, CREAM, rect.inflate(8, 8), 3, border_radius=14)
+
+        if i in prog.favorites:  # gold badge = hanging in the living room, number = which slot
+            badge = (rect.right - 14, rect.top + 14)
+            pygame.draw.circle(screen, (232, 186, 64), badge, 15)
+            pygame.draw.circle(screen, (120, 80, 20), badge, 15, 2)
+            draw_text(screen, str(prog.favorites.index(i) + 1), font(18, True), INK, badge)
+
+        plate = pygame.Rect(0, 0, 148, 20)
+        plate.midtop = (cx, rect.bottom + 4)
+        pygame.draw.rect(screen, (196, 160, 70) if unlocked else (128, 120, 104), plate, border_radius=3)
+        pygame.draw.rect(screen, (120, 90, 30) if unlocked else (84, 78, 66), plate, 1, border_radius=3)
+        name = FISH[i]["name"]
+        draw_text(screen, name, fit_font(name, 13, 140, True),
+                  (50, 34, 10) if unlocked else (60, 56, 48), plate.center)
+        if not unlocked:
+            draw_text(screen, f"Unlocks at {FISH[i]['unlock_h']:g} hrs", font(13), CREAM,
+                      (cx, plate.bottom + 10), shadow=(0, 0, 0))
+    screen.set_clip(None)
+
+    bar = gallery_scrollbar(n, scroll)
+    if bar:
+        track, thumb = bar
+        pygame.draw.rect(screen, (40, 25, 15), track, border_radius=5)
+        pygame.draw.rect(screen, (225, 210, 175), thumb, border_radius=5)
+
+    # Header
+    head = pygame.Surface((W, GALLERY_VIEW.top), pygame.SRCALPHA)
+    head.fill((20, 12, 8, 220))
+    screen.blit(head, (0, 0))
+    draw_text(screen, "Fish Gallery", font(34, True), CREAM, (W // 2, 31), shadow=(0, 0, 0))
+    draw_text(screen,
+              f"Click an unlocked fish to save it to your living room ({len(prog.favorites)}/{MAX_FAVORITES}). "
+              "Gold badge = on display.",
+              font(16), CREAM, (W // 2, 65))
+    draw_text(screen, f"Collected {prog.level + 1} / {n}", font(18, True), CREAM, (W - 30, 31), anchor="midright")
 
 
 def draw_toast(screen, text):
@@ -747,6 +942,7 @@ def main():
     btn_pause = Button(a.pause, (W // 2, H - 50))
     btn_fish = Button(a.fish_btn, (W - 90, H - 52))
     btn_back = Button(a.back, (48, 48))
+    btn_gallery = Button(a.gallery_btn, (W - 100, H - 52))  # on the living room page
 
     cur_rect = pygame.Rect(0, 0, *CARD)
     cur_rect.midtop = (300, 70)
@@ -757,15 +953,38 @@ def main():
         cards[(i, False)] = make_card(a, i, False)
         cards[(i, True)] = make_card(a, i, True)
 
-    state = {"page": "home", "paused": False, "countdown": False}  # countdown False = count up (default)
+    # countdown False = count up (default); gscroll = gallery scroll in pixels; gdrag = dragging the scrollbar
+    state = {"page": "home", "paused": False, "countdown": False, "gscroll": 0.0, "gdrag": False}
     toast = {"queue": [], "text": "", "ttl": 0.0}
     t = mouth_t = save_timer = 0.0
     just_reset = False  # True for one frame after pressing R
+
+    def notify(msg):
+        """Show a short message right away (replaces whatever toast is showing)."""
+        toast["text"] = msg
+        toast["ttl"] = 2.5
+
+    def click_fish(i):
+        """Gallery click: save the fish to the living room, or take it back out."""
+        name = FISH[i]["name"]
+        result = prog.toggle_favorite(i)
+        if result == "added":
+            notify(f"{name} added to your living room")
+            prog.save()
+        elif result == "removed":
+            notify(f"{name} removed from your living room")
+            prog.save()
+        elif result == "full":
+            notify("Living room is full: click a fish with a gold badge to swap it out")
+        else:
+            notify(f"{name} unlocks at {FISH[i]['unlock_h']:g} hrs studied")
 
     def advance(sec):
         lvl_before = prog.level
         prog.add(sec)
         if prog.level > lvl_before:
+            for new_i in range(lvl_before + 1, prog.level + 1):
+                prog.auto_pin(new_i)  # a new fish takes a free living-room slot automatically
             toast["queue"].append(f"New fish unlocked: {FISH[prog.level]['name']}!")
         for name in prog.check_honors():
             toast["queue"].append(f"Honor unlocked: {name}")
@@ -801,6 +1020,8 @@ def main():
                 if event.key == pygame.K_ESCAPE:
                     if page in ("info", "living"):
                         state["page"] = "home"
+                    elif page == "gallery":
+                        state["page"] = "living"
                     elif page == "pause":
                         go_resume()
                 elif event.key == pygame.K_SPACE:
@@ -808,6 +1029,11 @@ def main():
                         go_pause()
                     elif page == "pause":
                         go_resume()
+                elif page == "gallery" and event.key in (pygame.K_UP, pygame.K_DOWN,
+                                                         pygame.K_PAGEUP, pygame.K_PAGEDOWN):
+                    step = {pygame.K_UP: -60, pygame.K_DOWN: 60,
+                            pygame.K_PAGEUP: -340, pygame.K_PAGEDOWN: 340}[event.key]
+                    state["gscroll"] = max(0, min(gallery_max_scroll(len(FISH)), state["gscroll"] + step))
                 elif DEBUG_KEYS and event.key == pygame.K_t and not state["paused"]:
                     advance(900)
                 elif DEBUG_KEYS and event.key == pygame.K_l and not state["paused"]:
@@ -825,6 +1051,8 @@ def main():
                     state["paused"] = False            # leave the pause screen if we were on it
                     state["page"] = "home"             # always return to the home page
                     state["countdown"] = False         # timer back to its default: counting up
+                    state["gscroll"] = 0.0             # gallery back to the top
+                    state["gdrag"] = False
                     if music:                          # restart the song from the beginning
                         music.stop()
                         music = load_music()
@@ -845,6 +1073,33 @@ def main():
                 if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
                         and cur_rect.collidepoint(event.pos)):
                     go_resume()
+            elif page == "living":
+                if btn_back.clicked(event):
+                    state["page"] = "home"
+                elif btn_gallery.clicked(event):
+                    state["page"] = "gallery"
+                elif (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
+                        and any(a.board_plaque.get_rect(center=pos).collidepoint(event.pos) for pos in SLOTS)):
+                    state["page"] = "gallery"  # clicking a plaque also opens the gallery
+            elif page == "gallery":
+                n = len(FISH)
+                if btn_back.clicked(event):
+                    state["page"] = "living"
+                elif event.type == pygame.MOUSEWHEEL:  # event.y: +1 = wheel up, -1 = wheel down
+                    state["gscroll"] = max(0, min(gallery_max_scroll(n), state["gscroll"] - event.y * 60))
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    bar = gallery_scrollbar(n, state["gscroll"])
+                    if bar and bar[0].inflate(16, 0).collidepoint(event.pos):
+                        state["gdrag"] = True  # grabbed the scrollbar
+                        state["gscroll"] = gallery_scroll_from_mouse(n, event.pos[1])
+                    else:
+                        clicked_fish = gallery_hit(event.pos, n, state["gscroll"])
+                        if clicked_fish is not None:
+                            click_fish(clicked_fish)
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    state["gdrag"] = False
+                elif event.type == pygame.MOUSEMOTION and state["gdrag"]:
+                    state["gscroll"] = gallery_scroll_from_mouse(n, event.pos[1])
             elif btn_back.clicked(event):
                 state["page"] = "home"
 
@@ -878,8 +1133,13 @@ def main():
         elif page == "info":
             draw_info(screen, a)
             btn_back.draw(screen)
-        else:
+        elif page == "living":
             draw_living_room(screen, a, prog, t, music)
+            btn_back.draw(screen)
+            btn_gallery.draw(screen)
+        else:  # gallery
+            state["gscroll"] = min(state["gscroll"], gallery_max_scroll(len(FISH)))
+            draw_gallery(screen, a, prog, t, music, state["gscroll"])
             btn_back.draw(screen)
 
         if page != "pause" and toast["ttl"] > 0:
