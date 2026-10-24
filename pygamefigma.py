@@ -39,6 +39,8 @@ CREAM = (245, 232, 200)
 FONT_NAMES = "inter,helveticaneue,helvetica,arial,dejavusans"
 CARD = (270, 150)
 SING = [0, 1, 2, 1]  # order the mouth frames play in
+TIMER_RECT = pygame.Rect(0, 0, 330, 100)  # click this area on the home page to flip the timer up/down
+TIMER_RECT.center = (W // 2, 54)
 
 # One entry per level, in unlock order. "file" is the prefix of assets/<file>_1.png, _2, _3...
 # unlock_h = total hours studied needed to unlock that fish.
@@ -518,9 +520,20 @@ def make_card(a, idx, locked):
 # --------------------------------------------------------------------------
 # Page drawing
 # --------------------------------------------------------------------------
-def draw_home(screen, a, prog, t, mouth_t, music):
+def draw_home(screen, a, prog, t, mouth_t, music, countdown=False):
     screen.blit(a.bg, (0, 0))
-    draw_text(screen, fmt_clock(prog.session), font(66, True), INK, (W // 2, 46))
+
+    
+    if countdown:
+        hrs = prog.hours_to_next()
+        secs = 0 if hrs is None else math.ceil(hrs * 3600)  # round up so 0:00 lands exactly on the unlock
+        clock_text = fmt_clock(secs)
+        caption = "All fish unlocked" if hrs is None else "Until next fish"
+    else:
+        clock_text = fmt_clock(prog.session)
+        caption = "Studied this session"
+    draw_text(screen, clock_text, font(66, True), INK, (W // 2, 46))
+    draw_text(screen, caption, font(15, True), INK, (W // 2, 90))
 
     board_rect = a.board_home.get_rect(center=(W // 2, 268))
     screen.blit(a.board_home, board_rect)
@@ -744,7 +757,7 @@ def main():
         cards[(i, False)] = make_card(a, i, False)
         cards[(i, True)] = make_card(a, i, True)
 
-    state = {"page": "home", "paused": False}
+    state = {"page": "home", "paused": False, "countdown": False}  # countdown False = count up (default)
     toast = {"queue": [], "text": "", "ttl": 0.0}
     t = mouth_t = save_timer = 0.0
     just_reset = False  # True for one frame after pressing R
@@ -811,6 +824,7 @@ def main():
                     toast["text"] = ""
                     state["paused"] = False            # leave the pause screen if we were on it
                     state["page"] = "home"             # always return to the home page
+                    state["countdown"] = False         # timer back to its default: counting up
                     if music:                          # restart the song from the beginning
                         music.stop()
                         music = load_music()
@@ -824,6 +838,9 @@ def main():
                     state["page"] = "info"
                 elif btn_fish.clicked(event):
                     state["page"] = "living"
+                elif (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
+                        and TIMER_RECT.collidepoint(event.pos)):
+                    state["countdown"] = not state["countdown"]  # flip count up <-> count down
             elif page == "pause":
                 if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
                         and cur_rect.collidepoint(event.pos)):
@@ -852,7 +869,7 @@ def main():
 
         page = state["page"]
         if page == "home":
-            draw_home(screen, a, prog, t, mouth_t, music)
+            draw_home(screen, a, prog, t, mouth_t, music, state["countdown"])
             btn_info.draw(screen)
             btn_pause.draw(screen)
             btn_fish.draw(screen)
