@@ -12,6 +12,12 @@ from types import SimpleNamespace
 
 import pygame
 
+try:
+    from music_reader import MusicReader  # needs numpy; keep music_reader.py next to main.py
+except ImportError as err:
+    print("Music disabled:", err)
+    MusicReader = None
+
 # --------------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------------
@@ -21,7 +27,6 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(BASE, "assets")
 MUSIC_DIR = os.path.join(BASE, "music")
 SAVE_PATH = os.path.join(BASE, "save.json")
-MUSIC_END = pygame.USEREVENT + 1
 DEBUG_KEYS = True  # press T on any non-paused page to add 15 minutes (for testing)
 
 GREEN = (8, 43, 10)
@@ -239,34 +244,27 @@ class Progress:
 # --------------------------------------------------------------------------
 # Music
 # --------------------------------------------------------------------------
-class Playlist:
-    def __init__(self):
-        self.ok = pygame.mixer.get_init() is not None
-        self.tracks = []
-        self.index = 0
-        exts = (".mp3", ".ogg", ".wav")
-        if self.ok and os.path.isdir(MUSIC_DIR):
-            self.tracks = sorted(f for f in os.listdir(MUSIC_DIR) if f.lower().endswith(exts))
-        if self.tracks:
-            pygame.mixer.music.set_endevent(MUSIC_END)
-            self.play_current()
+def load_music():
+    """Loads the first song in music/ with MusicReader (loops, tracks beats). None if no music."""
+    if MusicReader is None or not os.path.isdir(MUSIC_DIR):
+        return None
+    tracks = sorted(f for f in os.listdir(MUSIC_DIR) if f.lower().endswith((".mp3", ".ogg", ".wav")))
+    if not tracks:
+        return None
+    try:
+        reader = MusicReader(os.path.join(MUSIC_DIR, tracks[0]))
+        reader.unpause()  # starts playing
+        return reader
+    except Exception as err:  # bad file, no audio device, ...
+        print("Could not load music:", err)
+        return None
 
-    def play_current(self):
-        pygame.mixer.music.load(os.path.join(MUSIC_DIR, self.tracks[self.index]))
-        pygame.mixer.music.play()
 
-    def next(self):
-        if self.tracks:
-            self.index = (self.index + 1) % len(self.tracks)
-            self.play_current()
-
-    def pause(self):
-        if self.tracks:
-            pygame.mixer.music.pause()
-
-    def resume(self):
-        if self.tracks:
-            pygame.mixer.music.unpause()
+def mouth_index(music, n, ticks, offset=0):
+    """Mouth frame: changes on every beat when music is playing, else on a timer."""
+    if music is not None and len(music.beat_times) > 0:
+        return SING[(music.total_beats + offset) % len(SING)] % n
+    return SING[int(ticks + offset) % len(SING)] % n
 
 
 # --------------------------------------------------------------------------
@@ -488,7 +486,7 @@ def make_card(a, idx, locked):
 # --------------------------------------------------------------------------
 # Page drawing
 # --------------------------------------------------------------------------
-def draw_home(screen, a, prog, t, mouth_t):
+def draw_home(screen, a, prog, t, mouth_t, music):
     screen.blit(a.bg, (0, 0))
     draw_text(screen, fmt_clock(prog.session), font(66, True), INK, (W // 2, 46))
 
@@ -497,8 +495,11 @@ def draw_home(screen, a, prog, t, mouth_t):
 
     lvl = prog.level
     frames = a.fish[lvl].big
-    idx = SING[int(mouth_t / 0.18) % len(SING)] % len(frames)
-    bob = math.sin(t * 2.0) * 5
+    idx = mouth_index(music, len(frames), mouth_t / 0.18)
+    if music is not None and music.is_playing and music.base_bpm > 0:
+        bob = -math.sin(music.beat_phase() * math.pi) * 8  # hops up on each beat
+    else:
+        bob = math.sin(t * 2.0) * 5
     ang = math.sin(t * 1.3) * 1.5
     img = pygame.transform.rotozoom(frames[idx], ang, 1.0)
     screen.blit(img, img.get_rect(center=(W // 2, 240 + bob)))
@@ -594,7 +595,7 @@ def draw_info(screen, a):
         y += 28
 
 
-def draw_living_room(screen, a, prog, t):
+def draw_living_room(screen, a, prog, t, music):
     screen.blit(a.room, (0, 0))
 
     lamp = a.glow_lamp
@@ -637,7 +638,7 @@ def draw_living_room(screen, a, prog, t):
         screen.blit(board, rect)
         if unlocked:
             frames = a.fish[i].plaque
-            idx = SING[int(t * 4 + i * 3) % len(SING)] % len(frames)
+            idx = mouth_index(music, len(frames), t * 4, i * 3)
             screen.blit(frames[idx], frames[idx].get_rect(center=(pos[0], pos[1] - 2)))
         else:
             draw_text(screen, "?", font(64, True), (200, 190, 170), pos)
@@ -688,7 +689,7 @@ def main():
 
     a = load_assets()
     prog = Progress()
-    playlist = Playlist()
+    music = load_music()
 
     btn_info = Button(a.info, (70, H - 52))
     btn_pause = Button(a.pause, (W // 2, H - 50))
@@ -719,13 +720,15 @@ def main():
     def go_pause():
         state["paused"] = True
         state["page"] = "pause"
-        playlist.pause()
+        if music:
+            music.pause()
         prog.save()
 
     def go_resume():
         state["paused"] = False
         state["page"] = "home"
-        playlist.resume()
+        if music:
+            music.unpause()
 
     while True:
         dt = min(clock.tick(FPS) / 1000, 0.1)
@@ -734,10 +737,10 @@ def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 prog.save()
+                if music:
+                    music.stop()
                 pygame.quit()
                 sys.exit()
-            if event.type == MUSIC_END:
-                playlist.next()
             page = state["page"]
 
             if event.type == pygame.KEYDOWN:
@@ -768,6 +771,9 @@ def main():
             elif btn_back.clicked(event):
                 state["page"] = "home"
 
+        if music:
+            music.update()  # keeps the loop going and tracks beats
+
         # Time only counts while studying (not paused)
         if not state["paused"]:
             mouth_t += dt
@@ -786,7 +792,7 @@ def main():
 
         page = state["page"]
         if page == "home":
-            draw_home(screen, a, prog, t, mouth_t)
+            draw_home(screen, a, prog, t, mouth_t, music)
             btn_info.draw(screen)
             btn_pause.draw(screen)
             btn_fish.draw(screen)
@@ -796,7 +802,7 @@ def main():
             draw_info(screen, a)
             btn_back.draw(screen)
         else:
-            draw_living_room(screen, a, prog, t)
+            draw_living_room(screen, a, prog, t, music)
             btn_back.draw(screen)
 
         if page != "pause" and toast["ttl"] > 0:
