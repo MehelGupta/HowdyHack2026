@@ -652,10 +652,6 @@ def draw_home(screen, a, prog, t, mouth_t, music, countdown=False):
     screen.blit(a.bg, (0, 0))
 
     # Timer: counts UP (this session) by default, or DOWN to the next fish when toggled
-    if TIMER_RECT.collidepoint(pygame.mouse.get_pos()):  # soft highlight so it feels clickable
-        hl = pygame.Surface(TIMER_RECT.size, pygame.SRCALPHA)
-        pygame.draw.rect(hl, (255, 255, 255, 60), hl.get_rect(), border_radius=18)
-        screen.blit(hl, TIMER_RECT)
     if countdown:
         hrs = prog.hours_to_next()
         secs = 0 if hrs is None else math.ceil(hrs * 3600)  # round up so 0:00 lands exactly on the unlock
@@ -673,13 +669,8 @@ def draw_home(screen, a, prog, t, mouth_t, music, countdown=False):
     active_idx = prog.active_fish
     frames = a.fish[active_idx].big
     idx = mouth_index(music, len(frames), mouth_t / 0.18)
-    if music is not None and music.is_playing and music.base_bpm > 0:
-        bob = -math.sin(music.beat_phase() * math.pi) * 8  # hops up on each beat
-    else:
-        bob = math.sin(t * 2.0) * 5
-    ang = math.sin(t * 1.3) * 1.5
-    img = pygame.transform.rotozoom(frames[idx], ang, 1.0)
-    screen.blit(img, img.get_rect(center=(W // 2, 240 + bob)))
+    img = frames[idx]
+    screen.blit(img, img.get_rect(center=(W // 2, 240)))
 
     # One-line fun fact on the lower edge of the board
     fact = FISH[active_idx]["fact"]
